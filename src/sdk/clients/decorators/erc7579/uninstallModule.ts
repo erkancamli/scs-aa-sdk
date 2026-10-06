@@ -10,13 +10,15 @@ import {
 import { type SmartAccount, sendUserOperation } from "viem/account-abstraction"
 import { getAction } from "viem/utils"
 import { parseAccount } from "viem/utils"
-import { getInstalledValidators, getPreviousModule } from "."
 import { AccountNotFoundError } from "../../../account/utils/AccountNotFound"
 import type { Call } from "../../../account/utils/Types"
 import type {
   ModularSmartAccount,
   ModuleMeta
 } from "../../../modules/utils/Types"
+import { getInstalledExecutors } from "./getInstalledExecutors"
+import { getInstalledValidators } from "./getInstalledValidators"
+import { getPreviousModule } from "./getPreviousModule"
 import { parseModuleTypeId } from "./supportsModule"
 
 export type UninstallModuleParameters<
@@ -42,8 +44,7 @@ export type UninstallModuleParameters<
  * const userOpHash = await uninstallModule(startaleClient, {
  *   module: {
  *     type: 'executor',
- *     address: '0x...',
- *     context: '0x'
+ *     address: '0x...'
  *   }
  * })
  * console.log(userOpHash) // '0x...'
@@ -59,7 +60,7 @@ export async function uninstallModule<
     maxFeePerGas,
     maxPriorityFeePerGas,
     nonce,
-    module: { address, initData, type }
+    module
   } = parameters
 
   if (!account_) {
@@ -69,29 +70,12 @@ export async function uninstallModule<
   }
 
   const account = parseAccount(account_) as ModularSmartAccount
-  const [installedValidators] = await getInstalledValidators(client)
-
-  const prevModule = await getPreviousModule(client, {
-    module: {
-      address,
-      type
-    },
-    installedValidators,
-    account
-  })
-
-  const deInitData = encodeAbiParameters(
-    [
-      { name: "prev", type: "address" },
-      { name: "disableModuleData", type: "bytes" }
-    ],
-    [prevModule, initData ?? "0x"]
-  )
+  const deInitData = await toUninstallDeInitData(client, account, module)
 
   const calls = await toUninstallModuleCalls(account, {
-    address,
+    address: module.address,
     deInitData,
-    type
+    type: module.type
   })
 
   return getAction(
@@ -105,6 +89,45 @@ export async function uninstallModule<
     nonce,
     account
   })
+}
+
+/**
+ * Builds the deInitData that the account's uninstallModule expects.
+ *
+ * Validators and executors are kept in linked lists, so the account needs the
+ * entry before the module: abi.encode(prev, disableModuleData), where
+ * disableModuleData is the module's initData. Every other module type (hook,
+ * fallback, ...) receives the data unchanged. An explicit deInitData is used
+ * as is.
+ */
+export const toUninstallDeInitData = async (
+  client: Client<Transport, Chain | undefined, SmartAccount | undefined>,
+  account: ModularSmartAccount,
+  { address, type, initData, deInitData }: ModuleMeta
+): Promise<Hex> => {
+  if (deInitData) return deInitData
+  if (type !== "validator" && type !== "executor") return initData ?? "0x"
+
+  const [installed] =
+    type === "validator"
+      ? await getInstalledValidators(client, { account })
+      : await getInstalledExecutors(client, { account })
+
+  const prevModule = await getPreviousModule(client, {
+    module: { address, type },
+    ...(type === "validator"
+      ? { installedValidators: installed }
+      : { installedExecutors: installed }),
+    account
+  })
+
+  return encodeAbiParameters(
+    [
+      { name: "prev", type: "address" },
+      { name: "disableModuleData", type: "bytes" }
+    ],
+    [prevModule, initData ?? "0x"]
+  )
 }
 
 export const toUninstallModuleCalls = async (

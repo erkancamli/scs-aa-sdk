@@ -7,7 +7,10 @@ import type {
   ModularSmartAccount,
   ModuleMeta
 } from "../../../modules/utils/Types"
-import { toUninstallModuleCalls } from "./uninstallModule"
+import {
+  toUninstallDeInitData,
+  toUninstallModuleCalls
+} from "./uninstallModule"
 
 export type UninstallModulesParameters<
   TSmartAccount extends SmartAccount | undefined
@@ -31,8 +34,8 @@ export type UninstallModulesParameters<
  *
  * const userOpHash = await uninstallModules(startaleClient, {
  *   modules: [
- *     { type: 'executor', address: '0x...', context: '0x' },
- *     { type: 'validator', address: '0x...', context: '0x' }
+ *     { type: 'executor', address: '0x...' },
+ *     { type: 'validator', address: '0x...' }
  *   ]
  * })
  * console.log(userOpHash) // '0x...'
@@ -60,7 +63,13 @@ export async function uninstallModules<
   const account = parseAccount(account_) as unknown as ModularSmartAccount
   const calls = (
     await Promise.all(
-      modules.flatMap((module) => toUninstallModuleCalls(account, module))
+      modules.map(async (module) =>
+        toUninstallModuleCalls(account, {
+          address: module.address,
+          type: module.type,
+          deInitData: await toUninstallDeInitData(client, account, module)
+        })
+      )
     )
   ).flat()
 
